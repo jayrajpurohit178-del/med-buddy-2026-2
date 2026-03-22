@@ -1,0 +1,1164 @@
+import { useState, useRef, useEffect } from "react";
+
+/* ─────────────────────────────────────────
+   CONSTANTS & HELPERS
+───────────────────────────────────────── */
+const API = "https://api.anthropic.com/v1/messages";
+const MDL = "claude-sonnet-4-20250514";
+
+const NAV = [
+  { id:"dashboard",   icon:"grid",      label:"Dashboard"       },
+  { id:"prescription",icon:"clipboard", label:"Prescription"    },
+  { id:"expense",     icon:"wallet",    label:"Monthly Expense" },
+  { id:"checklist",   icon:"check",     label:"Checklist"       },
+  { id:"schedule",    icon:"calendar",  label:"Schedule"        },
+  { id:"history",     icon:"clock",     label:"History"         },
+  { id:"account",     icon:"user",      label:"Account"         },
+];
+
+const RX_SYS = `You are MedBuddy. Simplify prescriptions ONLY from what the doctor wrote. No extra advice, no alternatives.
+Return ONLY valid JSON: {"patientName":"","diagnosis":"plain language","diagnosisSimple":"2-3 sentence explanation","medications":[{"name":"","dosage":"","timing":"","days":"","withFood":false}],"sideEffects":["",""],"emergencyWarning":"","followUpChecklist":{"tests":[],"diet":[],"activity":[],"followUpDate":null},"oneLiner":""}`;
+
+const CHAT_SYS = `You are MedBuddy's friendly assistant. Help patients understand prescriptions in plain language. Never use jargon. Never suggest alternative medicines or new advice. Max 2-3 sentences per reply.`;
+
+const DEMO = `Patient: Arjun Mehta, Age: 52
+Diagnosis: Type 2 Diabetes Mellitus with mild hypertension
+Rx:
+1. Tab Metformin 500mg - 1-0-1 after meals x 30 days
+2. Tab Amlodipine 5mg - 1-0-0 after breakfast x 30 days
+3. Tab Atorvastatin 10mg - 0-0-1 after dinner x 30 days
+4. Tab Aspirin 75mg - 0-1-0 after lunch x 30 days
+Tests: FBS, HbA1c, Lipid profile, ECG
+Diet: Low salt low sugar, no fried food, more vegetables
+Activity: Walk 30 min daily, avoid heavy exercise
+Follow-up: 2 weeks
+Dr. Sunita Rao, MD Cardiology, Apollo Hospital`;
+
+function parseJSON(txt) {
+  try {
+    const c = txt.replace(/```json|```/g,"").trim();
+    return JSON.parse(c.slice(c.indexOf("{"), c.lastIndexOf("}")+1));
+  } catch { return null; }
+}
+
+/* ─────────────────────────────────────────
+   DESIGN TOKENS  — Light Blue Theme
+───────────────────────────────────────── */
+const T = {
+  // sidebar: deep ocean blue
+  sb:"#03204a", sbHov:"#063263", sbAct:"#0a4a8a", sbBdr:"#0a3060",
+  sbTxt:"#7db4e0", sbTxtAct:"#e0f2fe",
+  // accent — primary blue
+  grn:"#0ea5e9", grnD:"#0369a1", grnBg:"#e0f2fe",
+  // gradient strings
+  grad:"linear-gradient(135deg,#38bdf8 0%,#0ea5e9 50%,#0284c7 100%)",
+  gradSoft:"linear-gradient(135deg,#e0f2fe 0%,#bae6fd 100%)",
+  gradBtn:"linear-gradient(135deg,#0ea5e9 0%,#0284c7 100%)",
+  gradSide:"linear-gradient(180deg,#03204a 0%,#063a72 60%,#031a3a 100%)",
+  gradChat:"linear-gradient(135deg,#03204a 0%,#0a3a6e 100%)",
+  // surface
+  bg:"#f0f9ff", card:"#ffffff",
+  // text
+  ink:"#0c1a2e", sub:"#334e68", mute:"#7a9ab5",
+  // borders
+  brd:"#bae6fd", brd2:"#93c5fd",
+  // semantic
+  amber:"#d97706", amberBg:"#fffbeb",
+  red:"#dc2626",   redBg:"#fef2f2",
+  blue:"#0284c7",  blueBg:"#e0f2fe",
+  purple:"#7c3aed",purpleBg:"#f5f3ff",
+};
+
+/* ─────────────────────────────────────────
+   SVG ICONS
+───────────────────────────────────────── */
+const Icon = ({ n, size=16, col="currentColor" }) => {
+  const p = {
+    grid:    "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z",
+    clipboard:"M9 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V4a2 2 0 00-2-2h-3M9 2a2 2 0 002 2h2a2 2 0 002-2M9 2h6",
+    wallet:  "M21 12V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h14a2 2 0 002-2v-2m-5-5h5m-5 0a2 2 0 11-4 0 2 2 0 014 0z",
+    check:   "M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z",
+    calendar:"M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+    clock:   "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+    user:    "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+    mic:     "M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 3a4 4 0 014 4v4a4 4 0 01-8 0V7a4 4 0 014-4z",
+    upload:  "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12",
+    save:    "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4",
+    chat:    "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
+    help:    "M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+    photo:   "M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z",
+    send:    "M12 19l9 2-9-18-9 18 9-2zm0 0v-8",
+    menu:    "M4 6h16M4 12h16M4 18h16",
+    chevR:   "M9 5l7 7-7 7",
+    chevL:   "M15 19l-7-7 7-7",
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={col} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d={p[n]||p.help}/>
+    </svg>
+  );
+};
+
+/* ─────────────────────────────────────────
+   SMALL COMPONENTS
+───────────────────────────────────────── */
+const Spinner = ({size=20}) => (
+  <div style={{width:size,height:size,border:`2.5px solid #c026d330`,borderTop:`2.5px solid #8b5cf6`,borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/>
+);
+
+const Badge = ({label,bg,col}) => (
+  <span style={{background:bg,color:col,fontSize:10,fontWeight:700,padding:"2px 9px",borderRadius:20,letterSpacing:.3}}>{label}</span>
+);
+
+const timingStyle = t => {
+  const l=(t||"").toLowerCase();
+  if(l.includes("morning")||l.includes("1-0-0"))return{bg:T.amberBg,col:T.amber,lbl:"Morning"};
+  if(l.includes("afternoon")||l.includes("lunch")||l.includes("0-1-0"))return{bg:T.blueBg,col:T.blue,lbl:"Afternoon"};
+  if(l.includes("night")||l.includes("dinner")||l.includes("0-0-1"))return{bg:T.purpleBg,col:T.purple,lbl:"Night"};
+  return{bg:"#f3f4f6",col:T.sub,lbl:t||"As directed"};
+};
+
+/* ─────────────────────────────────────────
+   MAIN APP
+───────────────────────────────────────── */
+export default function MedBuddy() {
+  const [page,    setPage]    = useState("dashboard");
+  const [thin,    setThin]    = useState(false);       // sidebar collapsed
+  const [result,  setResult]  = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadMsg, setLoadMsg] = useState("");
+  const [err,     setErr]     = useState("");
+  const [rawText, setRawText] = useState("");
+  const [hist,    setHist]    = useState([]);
+  const [isRec,   setIsRec]   = useState(false);
+  const [audioTxt,setAudioTxt]= useState("");
+  const [medRes,  setMedRes]  = useState(null);
+  const [medLoad, setMedLoad] = useState(false);
+  const [checks,  setChecks]  = useState({});
+  const [notifPh, setNotifPh] = useState("");
+  const [notifWa, setNotifWa] = useState("");
+  const [notifOk, setNotifOk] = useState(false);
+  const [lang,    setLang]    = useState("English"); // output language
+  // chat
+  const [msgs,    setMsgs]    = useState([{from:"bot",text:"Hi! I'm your MedBuddy assistant. Ask me anything about your prescription 😊"}]);
+  const [chatIn,  setChatIn]  = useState("");
+  const [chatLoad,setChatLoad]= useState(false);
+
+  const fileRef   = useRef();
+  const medRef    = useRef();
+  const recRef    = useRef();
+  const chatEnd   = useRef();
+
+  const saveHist = d => setHist(p=>[{...d,savedAt:new Date().toISOString()},...p].slice(0,10));
+
+  /* ── API helpers ── */
+  const processText = async(text, outLang=lang)=>{
+    setLoading(true); setErr(""); setLoadMsg("Reading document...");
+    try {
+      const langNote = `Please provide all plain-language explanations and the diagnosisSimple field in ${outLang}.`;
+      const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:MDL,max_tokens:1000,system:RX_SYS,messages:[{role:"user",content:`${langNote}\n\n${text}`}]})});
+      const d=await r.json();
+      setLoadMsg("Simplifying medical terms...");
+      const p=parseJSON(d.content?.find(b=>b.type==="text")?.text||"");
+      if(!p)throw new Error("Could not parse. Try pasting the text instead.");
+      setResult({...p, outputLang:outLang}); saveHist({...p, outputLang:outLang}); setPage("prescription");
+    } catch(e){setErr(e.message);}
+    setLoading(false);
+  };
+
+  const handleFile = e=>{
+    const f=e.target.files?.[0]; if(!f)return;
+    const rd=new FileReader();
+    rd.onload=async()=>{
+      const b64=rd.result.split(",")[1];
+      setLoading(true); setErr(""); setLoadMsg("Reading file...");
+      try {
+        const blk=f.type.startsWith("image/")
+          ?{type:"image",source:{type:"base64",media_type:f.type,data:b64}}
+          :{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}};
+        const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({model:MDL,max_tokens:1000,system:RX_SYS,
+            messages:[{role:"user",content:[blk,{type:"text",text:"Extract and simplify. Handwritten text is fine."}]}]})});
+        const d=await r.json();
+        const p=parseJSON(d.content?.find(b=>b.type==="text")?.text||"");
+        if(!p)throw new Error("Could not read file. Ensure the image is clear.");
+        setResult(p); saveHist(p); setPage("prescription");
+      } catch(e){setErr(e.message);}
+      setLoading(false);
+    };
+    rd.readAsDataURL(f);
+  };
+
+  const handleMedPhoto = e=>{
+    const f=e.target.files?.[0]; if(!f)return;
+    const rd=new FileReader();
+    rd.onload=async()=>{
+      const b64=rd.result.split(",")[1];
+      setMedLoad(true); setMedRes(null);
+      try {
+        const ctx=result?.medications?`Prescription context: ${JSON.stringify(result.medications)}`:"";
+        const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({model:MDL,max_tokens:1000,
+            system:`Identify medicine from image. Return ONLY JSON: {"medicineName":"","purpose":"plain language what it does","commonFor":"","prescribedInfo":"","importantNote":""}`,
+            messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:f.type,data:b64}},{type:"text",text:`Identify this medicine. ${ctx}`}]}]})});
+        const d=await r.json();
+        const p=parseJSON(d.content?.find(b=>b.type==="text")?.text||"");
+        setMedRes(p||{medicineName:"Unknown",purpose:"Could not identify."});
+      } catch(e){setErr(e.message);}
+      setMedLoad(false);
+    };
+    rd.readAsDataURL(f);
+  };
+
+  const startRec=()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){setAudioTxt("Speech recognition not supported. Paste transcript below.");return;}
+    const r=new SR(); r.continuous=true; r.interimResults=true;
+    r.lang = lang==="Hindi" ? "hi-IN" : "en-IN";
+    let t="";
+    r.onresult=e=>{t=Array.from(e.results).map(x=>x[0].transcript).join(" ");setAudioTxt(t);};
+    r.start(); recRef.current=r; setIsRec(true);
+  };
+  const stopRec=()=>{recRef.current?.stop();setIsRec(false);};
+
+  const sendChat=async()=>{
+    if(!chatIn.trim())return;
+    const msg=chatIn.trim(); setChatIn("");
+    const next=[...msgs,{from:"user",text:msg}];
+    setMsgs(next); setChatLoad(true);
+    try {
+      const ctx=result?`Patient's prescription: ${JSON.stringify({diagnosis:result.diagnosis,medications:result.medications})}. `:"";
+      const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:MDL,max_tokens:1000,system:CHAT_SYS,messages:[{role:"user",content:ctx+msg}]})});
+      const d=await r.json();
+      const rep=d.content?.find(b=>b.type==="text")?.text||"Sorry, try again.";
+      setMsgs([...next,{from:"bot",text:rep}]);
+    } catch {setMsgs([...next,{from:"bot",text:"Oops! Something went wrong."}]);}
+    setChatLoad(false);
+    setTimeout(()=>chatEnd.current?.scrollIntoView({behavior:"smooth"}),100);
+  };
+
+  const chk=k=>setChecks(p=>({...p,[k]:!p[k]}));
+
+  /* ════════════════════════════════════════
+     LEFT SIDEBAR
+  ════════════════════════════════════════ */
+  const Sidebar = ()=>(
+    <aside style={{
+      width:thin?64:220, minHeight:"100vh", background:T.gradSide,
+      display:"flex", flexDirection:"column", flexShrink:0,
+      transition:"width .22s ease", overflow:"hidden", position:"relative", zIndex:10,
+    }}>
+      {/* Logo row */}
+      <div style={{padding:"18px 14px 14px",borderBottom:`1px solid ${T.sbBdr}`,display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:36,height:36,borderRadius:10,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" fill="white"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-6h2v6zm0-8h-2V6h2v2z" fill="white" opacity=".5"/></svg>
+        </div>
+        {!thin&&<div>
+          <div style={{color:"#e0f2fe",fontWeight:700,fontSize:15,letterSpacing:"-.3px",fontFamily:"'DM Serif Display',Georgia,serif"}}>MedBuddy</div>
+          <div style={{color:T.sbTxt,fontSize:10,marginTop:1}}>AI Prescription Helper</div>
+        </div>}
+      </div>
+
+      {/* Collapse toggle */}
+      <button onClick={()=>setThin(p=>!p)} style={{
+        margin:"8px 10px",padding:"6px",background:"transparent",border:`1px solid ${T.sbBdr}`,
+        borderRadius:7,color:T.sbTxt,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+      }}>
+        <Icon n={thin?"chevR":"chevL"} size={14} col={T.sbTxt}/>
+      </button>
+
+      {/* Nav */}
+      <nav style={{flex:1,paddingTop:4}}>
+        {NAV.map(item=>(
+          <button key={item.id} onClick={()=>setPage(item.id)} title={thin?item.label:""} style={{
+            width:"100%",display:"flex",alignItems:"center",gap:12,
+            padding:thin?"10px 20px":"10px 16px",
+            background:page===item.id?"rgba(14,165,233,0.18)":"transparent",
+            border:"none",borderLeft:page===item.id?`3px solid #38bdf8`:"3px solid transparent",
+            color:page===item.id?T.sbTxtAct:T.sbTxt,
+            cursor:"pointer",fontSize:13,fontWeight:page===item.id?600:400,
+            textAlign:"left",transition:"all .14s",whiteSpace:"nowrap",
+          }}>
+            <Icon n={item.icon} size={17} col={page===item.id?"#38bdf8":T.sbTxt}/>
+            {!thin&&<span>{item.label}</span>}
+          </button>
+        ))}
+      </nav>
+
+      {/* Bottom hint */}
+      {!thin&&<div style={{padding:"12px 16px",borderTop:`1px solid ${T.sbBdr}`}}>
+        <div style={{fontSize:10,color:T.sbTxt,lineHeight:1.5}}>IAR Udaan Hackathon 2026</div>
+      </div>}
+    </aside>
+  );
+
+  /* ════════════════════════════════════════
+     TOPBAR
+  ════════════════════════════════════════ */
+  const Topbar = ()=>(
+    <div style={{height:52,background:T.card,borderBottom:`1px solid ${T.brd}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px",flexShrink:0,borderTop:`3px solid transparent`,backgroundImage:`${T.card},${T.grad}`,backgroundOrigin:"border-box",backgroundClip:"padding-box,border-box"}}>
+      <div style={{fontWeight:700,fontSize:15,color:T.ink,fontFamily:"'DM Serif Display',Georgia,serif"}}>
+        {NAV.find(n=>n.id===page)?.label||"Dashboard"}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        {result&&<Badge label={`${result.medications?.length||0} medicines`} bg={T.grnBg} col={T.grnD}/>}
+        {result&&<Badge label={result.patientName||"Patient"} bg="#f3f0ff" col={T.grnD}/>}
+      </div>
+    </div>
+  );
+
+  /* ════════════════════════════════════════
+     PAGE VIEWS
+  ════════════════════════════════════════ */
+
+  /* ── Dashboard ── */
+  const Dashboard=()=>(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+      {/* Error banner */}
+      {err&&<div style={{background:T.redBg,border:`1px solid ${T.red}30`,borderRadius:10,padding:"10px 14px",fontSize:13,color:T.red,display:"flex",justifyContent:"space-between"}}>
+        <span>{err}</span><button onClick={()=>setErr("")} style={{background:"none",border:"none",color:T.red,cursor:"pointer",fontSize:16}}>×</button>
+      </div>}
+
+      {/* ── Row A: Upload doc/pdf/photo ── */}
+      <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:14,overflow:"hidden"}}>
+        <div style={{padding:"14px 18px",borderBottom:`1px solid ${T.brd}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <Icon n="upload" size={16} col={T.grn}/>
+            <span style={{fontWeight:700,fontSize:14,color:T.ink}}>Upload doc / PDF / Photo</span>
+          </div>
+          <button onClick={()=>medRef.current?.click()} style={{
+            display:"flex",alignItems:"center",gap:6,padding:"6px 12px",
+            background:T.grad,border:"none",borderRadius:8,fontSize:12,fontWeight:600,color:"#fff",cursor:"pointer"
+          }}>
+            <Icon n="photo" size={13} col="#fff"/> Med Photo
+          </button>
+          <input ref={medRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleMedPhoto}/>
+        </div>
+
+        <div style={{padding:18}}>
+          {/* Drop zone */}
+          <div onClick={()=>fileRef.current?.click()} style={{
+            border:`2px dashed #7dd3fc`,borderRadius:12,padding:"24px 16px",textAlign:"center",
+            cursor:"pointer",background:T.gradSoft,marginBottom:14,transition:"opacity .15s"
+          }}>
+            <div style={{width:44,height:44,borderRadius:12,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 10px"}}>
+              <Icon n="upload" size={22} col="#fff"/>
+            </div>
+            <div style={{fontWeight:600,fontSize:14,color:T.ink}}>Click to upload prescription</div>
+            <div style={{fontSize:12,color:T.mute,marginTop:3}}>PDF, JPG, PNG — printed or handwritten</div>
+            <input ref={fileRef} type="file" accept=".pdf,image/*" style={{display:"none"}} onChange={handleFile}/>
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <div style={{flex:1,height:1,background:T.brd}}/><span style={{fontSize:11,color:T.mute}}>or paste text</span><div style={{flex:1,height:1,background:T.brd}}/>
+          </div>
+
+          {/* Output language selector */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,background:T.grnBg,borderRadius:10,padding:"8px 12px",border:`1px solid ${T.brd}`}}>
+            <span style={{fontSize:11,fontWeight:700,color:T.grnD,letterSpacing:.4,textTransform:"uppercase"}}>📤 Output Language</span>
+            <div style={{display:"flex",borderRadius:7,border:`1px solid ${T.brd2}`,overflow:"hidden"}}>
+              {["English","Hindi"].map(l=>(
+                <button key={l} onClick={()=>setLang(l)} style={{
+                  padding:"5px 16px",fontSize:11,fontWeight:700,border:"none",cursor:"pointer",
+                  background:lang===l?T.gradBtn:T.card,
+                  color:lang===l?"#fff":T.grnD,
+                  transition:"all .15s"
+                }}>{l==="Hindi"?"हिंदी":"English"}</button>
+              ))}
+            </div>
+          </div>
+
+          <textarea value={rawText} onChange={e=>setRawText(e.target.value)}
+            placeholder="Paste prescription text here..."
+            style={{width:"100%",minHeight:72,padding:"10px 12px",fontSize:13,borderRadius:9,border:`1px solid ${T.brd2}`,resize:"vertical",boxSizing:"border-box",fontFamily:"inherit",color:T.ink,background:"#fafafa"}}/>
+
+          <div style={{display:"flex",gap:8,marginTop:10}}>
+            <button onClick={()=>processText(rawText)} disabled={!rawText.trim()||loading} style={{
+              flex:1,padding:"10px",background:rawText.trim()&&!loading?T.gradBtn:"#e5e7eb",
+              color:rawText.trim()&&!loading?"#fff":T.mute,border:"none",borderRadius:9,
+              fontSize:13,fontWeight:700,cursor:rawText.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",gap:8
+            }}>
+              {loading?<><Spinner size={16}/> {loadMsg}</>:"Simplify Prescription"}
+            </button>
+            <button onClick={()=>processText(DEMO)} disabled={loading} style={{
+              padding:"10px 16px",background:"transparent",border:`1px solid ${T.brd2}`,
+              borderRadius:9,fontSize:13,cursor:"pointer",color:T.sub,fontWeight:500
+            }}>Try Demo</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Med photo result */}
+      {(medLoad||medRes)&&(
+        <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:14,padding:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+            <Icon n="photo" size={15} col={T.grn}/><span style={{fontWeight:700,fontSize:13,color:T.ink}}>Medicine Identification</span>
+          </div>
+          {medLoad?<div style={{textAlign:"center",padding:"20px"}}><Spinner/></div>:medRes&&(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{fontWeight:700,fontSize:15,color:T.ink}}>{medRes.medicineName}</div>
+              {medRes.purpose&&<div style={{fontSize:13,color:T.sub,lineHeight:1.6}}>{medRes.purpose}</div>}
+              {medRes.prescribedInfo&&<div style={{background:T.grnBg,borderRadius:8,padding:"8px 12px",fontSize:12,color:T.grnD}}><strong>From your prescription:</strong> {medRes.prescribedInfo}</div>}
+              {medRes.importantNote&&<div style={{background:T.amberBg,borderRadius:8,padding:"8px 12px",fontSize:12,color:T.amber}}><strong>Note:</strong> {medRes.importantNote}</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Row B: compact icon action strip ── */}
+      <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:14,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+
+        {/* Record button */}
+        <button onClick={isRec?stopRec:startRec} title={isRec?"Stop recording":"Record doctor session"} style={{
+          display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+          background:isRec?T.red:T.gradBtn,
+          border:"none",borderRadius:10,cursor:"pointer",
+          color:"#fff",fontSize:12,fontWeight:600,flexShrink:0,
+          boxShadow:isRec?`0 0 0 4px ${T.red}22`:`0 0 0 4px #0ea5e922`,
+          transition:"all .2s"
+        }}>
+          <Icon n={isRec?"save":"mic"} size={15} col="#fff"/>
+          {isRec?(
+            <span style={{display:"flex",alignItems:"center",gap:5}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#fff",animation:"pulse 1s infinite",display:"inline-block"}}/>
+              Stop
+            </span>
+          ):"Record"}
+        </button>
+
+        {/* Upload Recording (renamed from Save Recording) */}
+        <button onClick={()=>document.getElementById("audio-up")?.click()} title="Upload recording from system" style={{
+          display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+          background:T.grnBg,border:`1px solid ${T.brd2}`,borderRadius:10,
+          cursor:"pointer",color:T.grnD,fontSize:12,fontWeight:600,flexShrink:0
+        }}>
+          <Icon n="upload" size={15} col={T.grnD}/>
+          Upload Recording
+        </button>
+        <input id="audio-up" type="file" accept="audio/*" style={{display:"none"}}
+          onChange={e=>{const f=e.target.files?.[0];if(f)setAudioTxt(`[Audio: "${f.name}" uploaded. Paste transcript below.]`);}}/>
+
+        {/* Upload image from system */}
+        <button onClick={()=>fileRef.current?.click()} title="Upload image from system" style={{
+          display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+          background:T.grnBg,border:`1px solid ${T.brd2}`,borderRadius:10,
+          cursor:"pointer",color:T.grnD,fontSize:12,fontWeight:600,flexShrink:0
+        }}>
+          <Icon n="photo" size={15} col={T.grnD}/>
+          Upload Image
+        </button>
+
+        {/* Recording status */}
+        {isRec&&<div style={{fontSize:11,color:T.red,fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:T.red,animation:"pulse 1s infinite"}}/>
+          Recording...
+        </div>}
+
+        {/* Extract button */}
+        {audioTxt&&!isRec&&(
+          <button onClick={()=>processText(audioTxt)} style={{
+            marginLeft:"auto",display:"flex",alignItems:"center",gap:6,padding:"8px 14px",
+            background:T.gradBtn,color:"#fff",border:"none",borderRadius:10,
+            fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0
+          }}><Icon n="clipboard" size={13} col="#fff"/> Extract</button>
+        )}
+      </div>
+
+      {/* Transcript preview — only shown when there's audio text */}
+      {audioTxt&&(
+        <div style={{background:"#f0f9ff",border:`1px solid ${T.brd2}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:T.sub,lineHeight:1.6,maxHeight:52,overflow:"auto"}}>
+          {audioTxt}
+        </div>
+      )}
+
+      {/* Processed banner */}
+      {result&&!loading&&(
+        <div style={{background:T.grnBg,border:`1px solid ${T.brd2}`,borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13,color:T.grnD}}>✓ Prescription ready — {result.patientName||"Patient"}</div>
+            <div style={{fontSize:12,color:T.sub,marginTop:2}}>{result.oneLiner}</div>
+          </div>
+          <button onClick={()=>setPage("prescription")} style={{
+            padding:"7px 16px",background:T.gradBtn,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"
+          }}>View →</button>
+        </div>
+      )}
+    </div>
+  );
+
+  /* ── Prescription ── */
+  const handlePrint = () => {
+    if (!result) return;
+    const meds = result.medications?.map((m,i) =>
+      `<tr>
+        <td>${i+1}. ${m.name}</td>
+        <td>${m.dosage}</td>
+        <td>${m.timing||'As directed'}</td>
+        <td>${m.days||'As advised'}</td>
+        <td>${m.withFood ? 'Yes' : 'No'}</td>
+      </tr>`
+    ).join('') || '';
+
+    const sideEffects = result.sideEffects?.map(s => `<li>${s}</li>`).join('') || '';
+    const tests = result.followUpChecklist?.tests?.map(t=>`<li>${t}</li>`).join('') || '';
+    const diet  = result.followUpChecklist?.diet?.map(d=>`<li>${d}</li>`).join('') || '';
+    const activity = result.followUpChecklist?.activity?.map(a=>`<li>${a}</li>`).join('') || '';
+
+    const html = `<!DOCTYPE html><html><head><title>MedBuddy — Simplified Prescription</title>
+    <style>
+      body { font-family: 'Segoe UI', sans-serif; color: #0c1a2e; margin: 0; padding: 32px; font-size: 13px; }
+      .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0ea5e9; padding-bottom: 14px; margin-bottom: 20px; }
+      .logo { display: flex; align-items: center; gap: 10px; }
+      .logo-icon { width: 38px; height: 38px; background: linear-gradient(135deg,#38bdf8,#0284c7); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 16px; }
+      .logo-text { font-size: 18px; font-weight: 700; color: #0369a1; }
+      .logo-sub { font-size: 10px; color: #7a9ab5; }
+      .meta { text-align: right; font-size: 11px; color: #7a9ab5; }
+      .section { margin-bottom: 18px; border: 1px solid #bae6fd; border-radius: 10px; overflow: hidden; }
+      .section-title { background: #e0f2fe; padding: 8px 14px; font-size: 11px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 0.5px; }
+      .section-body { padding: 12px 14px; }
+      .diagnosis-name { font-size: 15px; font-weight: 700; color: #0c1a2e; margin-bottom: 5px; }
+      .diagnosis-simple { font-size: 12px; color: #334e68; line-height: 1.7; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th { background: #e0f2fe; padding: 7px 10px; text-align: left; font-weight: 700; font-size: 10px; color: #0369a1; border-bottom: 1px solid #93c5fd; }
+      td { padding: 8px 10px; border-bottom: 1px solid #e0f2fe; color: #334e68; }
+      tr:last-child td { border-bottom: none; }
+      .badge-m { background: #fffbeb; color: #d97706; border-radius: 12px; padding: 2px 8px; font-size: 10px; font-weight: 700; }
+      .badge-a { background: #eff6ff; color: #2563eb; border-radius: 12px; padding: 2px 8px; font-size: 10px; font-weight: 700; }
+      .badge-n { background: #f5f3ff; color: #7c3aed; border-radius: 12px; padding: 2px 8px; font-size: 10px; font-weight: 700; }
+      ul { margin: 6px 0 0; padding-left: 18px; }
+      ul li { margin-bottom: 5px; color: #334e68; font-size: 12px; line-height: 1.6; }
+      .emergency { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 8px 12px; font-size: 12px; color: #dc2626; margin-top: 10px; }
+      .oneliner { background: #e0f2fe; border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 600; color: #0c1a2e; margin-bottom: 18px; }
+      .oneliner-label { font-size: 9px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+      .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #bae6fd; font-size: 10px; color: #7a9ab5; text-align: center; }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      @media print { body { padding: 20px; } button { display: none; } }
+    </style></head><body>
+    <div class="header">
+      <div class="logo">
+        <div class="logo-icon">M</div>
+        <div><div class="logo-text">MedBuddy</div><div class="logo-sub">AI Prescription Simplifier</div></div>
+      </div>
+      <div class="meta">
+        <div><strong>Patient:</strong> ${result.patientName||'Patient'}</div>
+        <div><strong>Generated:</strong> ${new Date().toLocaleDateString('en-IN', {day:'numeric',month:'long',year:'numeric'})}</div>
+        <div><strong>Language:</strong> ${result.outputLang||lang}</div>
+      </div>
+    </div>
+
+    <div class="oneliner"><div class="oneliner-label">📢 Share with family</div>${result.oneLiner}</div>
+
+    <div class="section">
+      <div class="section-title">🩺 Diagnosis — Plain Language</div>
+      <div class="section-body">
+        <div class="diagnosis-name">${result.diagnosis}</div>
+        <div class="diagnosis-simple">${result.diagnosisSimple}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">💊 Medication Schedule</div>
+      <div class="section-body" style="padding:0">
+        <table>
+          <thead><tr><th>Medicine</th><th>Dosage</th><th>Timing</th><th>Days</th><th>With food?</th></tr></thead>
+          <tbody>${meds}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="section">
+        <div class="section-title">⚠️ Side Effects to Watch</div>
+        <div class="section-body"><ul>${sideEffects}</ul>
+        ${result.emergencyWarning?`<div class="emergency">🚨 <strong>Call doctor if:</strong> ${result.emergencyWarning}</div>`:''}
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">✅ Follow-up Checklist</div>
+        <div class="section-body">
+          ${tests?`<strong style="font-size:11px;color:#0369a1">Tests</strong><ul>${tests}</ul>`:''}
+          ${diet?`<strong style="font-size:11px;color:#0369a1">Diet</strong><ul>${diet}</ul>`:''}
+          ${activity?`<strong style="font-size:11px;color:#0369a1">Activity</strong><ul>${activity}</ul>`:''}
+          ${result.followUpChecklist?.followUpDate?`<p style="font-size:12px;color:#0369a1;margin-top:6px">📅 Follow-up: ${result.followUpChecklist.followUpDate}</p>`:''}
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Generated by MedBuddy AI · IAR Udaan Hackathon 2026 · This is a simplified explanation only — always follow your doctor's advice.</div>
+    </body></html>`;
+
+    const win = window.open('', '_blank');
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 400);
+  };
+
+  const Prescription=()=>!result?(
+    <div style={{textAlign:"center",padding:"70px 20px"}}>
+      <div style={{width:60,height:60,borderRadius:16,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><Icon n="clipboard" size={28} col="#fff"/></div>
+      <div style={{fontSize:15,fontWeight:600,color:T.ink,marginBottom:6}}>No prescription yet</div>
+      <div style={{fontSize:13,color:T.mute,marginBottom:18}}>Upload a prescription from the Dashboard to get started.</div>
+      <button onClick={()=>setPage("dashboard")} style={{padding:"9px 20px",background:T.gradBtn,color:"#fff",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>Go to Dashboard →</button>
+    </div>
+  ):(
+    <div>
+      {/* Header bar */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:11,fontWeight:700,color:T.grnD,background:T.grnBg,padding:"3px 10px",borderRadius:20,border:`1px solid ${T.brd2}`}}>
+            {result.patientName||"Patient"}
+          </div>
+          <Badge label={`${result.medications?.length||0} medicines`} bg={T.grnBg} col={T.grnD}/>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={handlePrint} title="Print simplified prescription" style={{
+            display:"flex",alignItems:"center",gap:7,
+            padding:"7px 16px",
+            background:"#fff",
+            color:T.grnD,
+            border:`2px solid ${T.grn}`,
+            borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",
+            boxShadow:`0 2px 8px ${T.grn}30`,
+            transition:"all .15s"
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.grn} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9V2h12v7"/>
+              <rect x="2" y="9" width="20" height="9" rx="2"/>
+              <path d="M6 14h12v8H6z"/>
+              <circle cx="18" cy="13.5" r="1" fill={T.grn}/>
+            </svg>
+            🖨 Print
+          </button>
+          <button onClick={()=>{setResult(null);setPage("dashboard");}} style={{padding:"6px 14px",border:`1px solid ${T.brd2}`,background:"transparent",borderRadius:8,fontSize:12,cursor:"pointer",color:T.mute}}>
+            New prescription
+          </button>
+        </div>
+      </div>
+
+      {/* ── SPLIT LAYOUT: Left = raw input  |  Right = simplified output ── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+
+        {/* ── LEFT: Original input ── */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {/* Column label */}
+          <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",background:"#f1f5f9",borderRadius:10,border:`1px solid ${T.brd}`}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.mute} strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+            <span style={{fontSize:11,fontWeight:700,color:T.mute,letterSpacing:.5,textTransform:"uppercase"}}>Original Prescription</span>
+          </div>
+
+          {/* Raw prescription text */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:8}}>📄 As written by doctor</div>
+            <pre style={{fontSize:12,color:T.sub,lineHeight:1.8,whiteSpace:"pre-wrap",wordBreak:"break-word",fontFamily:"'DM Sans',sans-serif",margin:0,background:"#f8fbff",borderRadius:8,padding:"10px 12px",border:`1px solid ${T.brd}`}}>
+              {rawText||"[Uploaded via file — original text not shown]"}
+            </pre>
+          </div>
+
+          {/* Original diagnosis label */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:6}}>🩺 Diagnosis (as written)</div>
+            <div style={{fontSize:13,color:T.sub,lineHeight:1.7,fontStyle:"italic"}}>
+              {result.diagnosis}
+            </div>
+          </div>
+
+          {/* Raw medicine list */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:8}}>💊 Medicines (original)</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {result.medications?.map((m,i)=>(
+                <div key={i} style={{fontSize:12,color:T.sub,padding:"6px 10px",background:"#f8fbff",borderRadius:7,border:`1px solid ${T.brd}`,fontFamily:"monospace"}}>
+                  {i+1}. {m.name} {m.dosage} — {m.timing} × {m.days||"as advised"}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ── RIGHT: Simplified AI output ── */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {/* Column label */}
+          <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",background:T.grnBg,borderRadius:10,border:`1px solid ${T.brd2}`}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.grnD} strokeWidth="2" strokeLinecap="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <span style={{fontSize:11,fontWeight:700,color:T.grnD,letterSpacing:.5,textTransform:"uppercase"}}>AI Simplified Output</span>
+            <span style={{marginLeft:"auto",fontSize:10,background:T.gradBtn,color:"#fff",padding:"2px 8px",borderRadius:20,fontWeight:600}}>📤 {lang}</span>
+          </div>
+
+          {/* One-liner share card */}
+          <div style={{background:T.gradSoft,border:`1px solid ${T.brd2}`,borderRadius:12,padding:"10px 14px"}}>
+            <div style={{fontSize:10,color:T.grnD,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:3}}>Share with family</div>
+            <div style={{fontSize:13,fontWeight:600,color:T.ink}}>{result.oneLiner}</div>
+          </div>
+
+          {/* Plain language diagnosis */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:6}}>🩺 What this means (plain language)</div>
+            <div style={{fontSize:13,color:T.ink,fontWeight:600,marginBottom:5}}>{result.diagnosis}</div>
+            <div style={{fontSize:12,color:T.sub,lineHeight:1.75}}>{result.diagnosisSimple}</div>
+          </div>
+
+          {/* Clean medication table */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:8}}>💊 Medication schedule (simplified)</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:T.grnBg}}>
+                  {["Medicine","Dosage","Timing","Days"].map(h=>(
+                    <th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,fontSize:10,color:T.grnD,borderBottom:`1px solid ${T.brd2}`,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.medications?.map((m,i)=>{
+                  const ts=timingStyle(m.timing);
+                  return(
+                    <tr key={i} style={{borderBottom:`1px solid ${T.brd}`}}>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:T.ink,fontSize:12}}>{m.name}</td>
+                      <td style={{padding:"8px 10px",color:T.sub,fontSize:12}}>{m.dosage}</td>
+                      <td style={{padding:"8px 10px"}}><Badge label={ts.lbl} bg={ts.bg} col={ts.col}/></td>
+                      <td style={{padding:"8px 10px",color:T.sub,fontSize:12}}>{m.days||"Advised"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Side effects */}
+          <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.mute,marginBottom:8}}>⚠️ Side effects to watch</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {result.sideEffects?.map((s,i)=>(
+                <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                  <div style={{width:5,height:5,borderRadius:"50%",background:T.amber,marginTop:5,flexShrink:0}}/>
+                  <div style={{fontSize:12,color:T.sub,lineHeight:1.6}}>{s}</div>
+                </div>
+              ))}
+            </div>
+            {result.emergencyWarning&&(
+              <div style={{marginTop:10,padding:"8px 12px",background:T.redBg,borderRadius:8,fontSize:12,color:T.red,display:"flex",gap:7}}>
+                <span>🚨</span><span><strong>Call doctor if:</strong> {result.emergencyWarning}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ── Checklist ── */
+  const Checklist=()=>!result?(
+    <div style={{textAlign:"center",padding:"70px 20px"}}>
+      <div style={{width:60,height:60,borderRadius:16,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><Icon n="check" size={28} col="#fff"/></div>
+      <div style={{fontSize:14,color:T.mute}}>Upload a prescription to see your checklist.</div>
+    </div>
+  ):(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {[{label:"Tests ordered",items:result.followUpChecklist?.tests,icon:"🔬"},{label:"Diet instructions",items:result.followUpChecklist?.diet,icon:"🥗"},{label:"Activity limits",items:result.followUpChecklist?.activity,icon:"🏃"}]
+        .filter(s=>s.items?.length>0)
+        .map(sec=>(
+          <div key={sec.label} style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:16}}>
+            <div style={{fontWeight:700,fontSize:14,color:T.ink,marginBottom:12}}>{sec.icon} {sec.label}</div>
+            {sec.items.map((item,i)=>{
+              const k=`${sec.label}-${i}`;
+              return(
+                <div key={i} onClick={()=>chk(k)} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10,cursor:"pointer"}}>
+                  <div style={{width:19,height:19,borderRadius:5,border:`2px solid ${checks[k]?T.grn:T.brd2}`,background:checks[k]?T.grad:T.card,flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s"}}>
+                    {checks[k]&&<svg width="10" height="8" viewBox="0 0 10 8"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </div>
+                  <div style={{fontSize:13,color:checks[k]?T.mute:T.sub,textDecoration:checks[k]?"line-through":"none",lineHeight:1.6}}>{item}</div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      {result.followUpChecklist?.followUpDate&&(
+        <div style={{background:T.blueBg,borderRadius:10,padding:"12px 14px",fontSize:13,color:T.blue,fontWeight:500}}>
+          📅 Follow-up date: {result.followUpChecklist.followUpDate}
+        </div>
+      )}
+    </div>
+  );
+
+  /* ── Schedule ── */
+  const Schedule=()=>!result?(
+    <div style={{textAlign:"center",padding:"70px 20px"}}>
+      <div style={{width:60,height:60,borderRadius:16,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><Icon n="calendar" size={28} col="#fff"/></div>
+      <div style={{fontSize:14,color:T.mute}}>Upload a prescription to see your schedule.</div>
+    </div>
+  ):(
+    <div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+        <button onClick={()=>setPage("account")} style={{padding:"7px 14px",background:T.gradBtn,color:"#fff",border:"none",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer"}}>Set Reminders</button>
+      </div>
+      {[
+        {slot:"Morning · 8:00 AM",keys:["morning","1-0-0"],ac:"#b45309",ab:T.amberBg},
+        {slot:"Afternoon · 1:00 PM",keys:["afternoon","lunch","0-1-0"],ac:T.blue,ab:T.blueBg},
+        {slot:"Night · 9:00 PM",keys:["night","dinner","0-0-1"],ac:T.purple,ab:T.purpleBg},
+      ].map(({slot,keys,ac,ab})=>{
+        const meds=result.medications?.filter(m=>keys.some(k=>m.timing?.toLowerCase().includes(k)))||[];
+        return(
+          <div key={slot} style={{marginBottom:18}}>
+            <div style={{fontSize:12,color:ac,fontWeight:700,marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:ac}}/> {slot}
+            </div>
+            {meds.length===0
+              ?<div style={{fontSize:12,color:T.mute,paddingLeft:14,fontStyle:"italic"}}>No medication at this time</div>
+              :meds.map((m,i)=>(
+                <div key={i} style={{background:ab,borderRadius:10,padding:"10px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${ac}`}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:13,color:T.ink}}>{m.name}</div>
+                    <div style={{fontSize:11,color:T.sub,marginTop:2}}>{m.dosage}{m.withFood?" · with food":""}</div>
+                  </div>
+                  <div style={{fontSize:11,color:T.mute}}>{m.days||"ongoing"}</div>
+                </div>
+              ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  /* ── Monthly Expense ── */
+  const Expense=()=>(
+    <div>
+      <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:16}}>
+        <div style={{fontWeight:700,fontSize:14,color:T.ink,marginBottom:12}}>💰 Medicine Cost Tracker</div>
+        {result?.medications?.length>0?(
+          <>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{background:"#f9fafb"}}>
+                  {["Medicine","Days","Est. Cost (₹)"].map(h=><th key={h} style={{padding:"8px 12px",textAlign:"left",fontWeight:700,fontSize:11,color:T.mute,borderBottom:`1px solid ${T.brd}`}}>{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {result.medications.map((m,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${T.brd}`}}>
+                    <td style={{padding:"9px 12px",fontWeight:600,color:T.ink}}>{m.name}</td>
+                    <td style={{padding:"9px 12px",color:T.sub}}>{m.days||"—"}</td>
+                    <td style={{padding:"9px 12px",color:T.mute}}>—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{marginTop:10,fontSize:12,color:T.mute}}>Enter actual costs or connect a pharmacy API to track spending.</div>
+          </>
+        ):<div style={{fontSize:13,color:T.mute}}>Upload a prescription to see medicines.</div>}
+      </div>
+    </div>
+  );
+
+  /* ── History ── */
+  const History=()=>(
+    <div>
+      {hist.length===0
+        ?<div style={{textAlign:"center",padding:"70px 20px"}}>
+          <div style={{width:60,height:60,borderRadius:16,background:T.grad,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><Icon n="clock" size={28} col="#fff"/></div>
+          <div style={{fontSize:14,color:T.mute}}>No history yet. Upload a prescription to get started.</div>
+        </div>
+        :hist.map((h,i)=>(
+          <div key={i} onClick={()=>{setResult(h);setPage("prescription");}} style={{
+            background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:"12px 16px",
+            marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+            transition:"box-shadow .15s"
+          }}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:T.ink}}>{h.patientName||"Patient"}</div>
+              <div style={{fontSize:12,color:T.sub,marginTop:2}}>{h.diagnosis}</div>
+              <div style={{fontSize:11,color:T.mute,marginTop:4}}>{h.medications?.length||0} medicines</div>
+            </div>
+            <div style={{fontSize:11,color:T.mute,whiteSpace:"nowrap",marginLeft:10}}>{new Date(h.savedAt).toLocaleDateString("en-IN")}</div>
+          </div>
+        ))}
+    </div>
+  );
+
+  /* ── Account ── */
+  const Account=()=>(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:20}}>
+        <div style={{fontWeight:700,fontSize:14,color:T.ink,marginBottom:14,display:"flex",alignItems:"center",gap:7}}>
+          <span>🔔</span> Medication Reminders
+        </div>
+        <div style={{marginBottom:12}}>
+          <label style={{fontSize:12,color:T.sub,display:"block",marginBottom:4,fontWeight:500}}>Mobile number (SMS)</label>
+          <input type="tel" placeholder="+91 98765 43210" value={notifPh} onChange={e=>setNotifPh(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:12,color:T.sub,display:"block",marginBottom:4,fontWeight:500}}>WhatsApp number</label>
+          <input type="tel" placeholder="+91 98765 43210" value={notifWa} onChange={e=>setNotifWa(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{background:T.amberBg,borderRadius:8,padding:"10px 12px",fontSize:12,color:T.amber,marginBottom:14,lineHeight:1.6}}>
+          Browser notifications active immediately. Real SMS + WhatsApp delivery requires Twilio + WhatsApp Business API backend integration.
+        </div>
+        <button onClick={()=>{setNotifOk(true);if("Notification" in window)Notification.requestPermission();}} style={{
+          width:"100%",padding:"10px",background:T.gradBtn,color:"#fff",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"
+        }}>Save & Activate Reminders</button>
+        {notifOk&&<div style={{marginTop:10,fontSize:12,color:T.grnD,textAlign:"center",fontWeight:600}}>✓ Reminders activated!</div>}
+      </div>
+      <div style={{background:T.card,border:`1px solid ${T.brd}`,borderRadius:12,padding:20}}>
+        <div style={{fontWeight:700,fontSize:14,color:T.ink,marginBottom:8}}>👤 Profile</div>
+        <div style={{fontSize:13,color:T.mute}}>Profile management coming soon.</div>
+      </div>
+    </div>
+  );
+
+  const PAGES = {dashboard:<Dashboard/>,prescription:<Prescription/>,expense:<Expense/>,checklist:<Checklist/>,schedule:<Schedule/>,history:<History/>,account:<Account/>};
+
+  /* ════════════════════════════════════════
+     FLOATING CHAT — FAB + slide-in panel
+  ════════════════════════════════════════ */
+  const [chatOpen, setChatOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState({});
+
+  const FloatingChat = () => (
+    <>
+      {/* Backdrop */}
+      {chatOpen && (
+        <div
+          onClick={()=>setChatOpen(false)}
+          style={{position:"fixed",inset:0,background:"rgba(15,5,30,0.35)",zIndex:998,backdropFilter:"blur(2px)"}}
+        />
+      )}
+
+      {/* Slide-in panel */}
+      <div style={{
+        position:"fixed", bottom:0, right:0,
+        width:320, height:"82vh", maxHeight:620,
+        background:T.card,
+        borderRadius:"20px 20px 0 0",
+        boxShadow:"0 -8px 40px rgba(2,132,199,0.22)",
+        display:"flex", flexDirection:"column",
+        zIndex:999,
+        transform: chatOpen ? "translateY(0)" : "translateY(110%)",
+        transition:"transform 0.32s cubic-bezier(0.34,1.26,0.64,1)",
+        overflow:"hidden",
+      }}>
+        {/* Panel header */}
+        <div style={{background:T.gradChat, padding:"14px 16px 12px", flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div style={{display:"flex",alignItems:"center",gap:9}}>
+              <div style={{width:40,height:40,borderRadius:12,background:T.gradBtn,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <svg width="28" height="28" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="28" cy="20" r="11" fill="white" fillOpacity="0.18"/>
+                  <circle cx="28" cy="20" r="11" stroke="white" strokeWidth="1.8"/>
+                  <rect x="19" y="11" width="18" height="4" rx="2" fill="white" fillOpacity="0.9"/>
+                  <rect x="24" y="8" width="8" height="4" rx="1.5" fill="white"/>
+                  <circle cx="24.5" cy="20" r="1.4" fill="white"/>
+                  <circle cx="31.5" cy="20" r="1.4" fill="white"/>
+                  <path d="M24 24.5 Q28 27.5 32 24.5" stroke="white" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
+                  <rect x="25.5" y="30.5" width="5" height="4" rx="1" fill="white" fillOpacity="0.7"/>
+                  <path d="M18 34 Q14 36 13 44 L43 44 Q42 36 38 34 L33 34.5 L28 38 L23 34.5 Z" fill="white" fillOpacity="0.15" stroke="white" strokeWidth="1.6"/>
+                  <path d="M22 36 Q20 40 22 43 Q24 46 27 45" stroke="white" strokeWidth="1.8" strokeLinecap="round" fill="none"/>
+                  <circle cx="27.5" cy="45.5" r="2" fill="white" fillOpacity="0.9"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:"#e0f2fe",letterSpacing:"-.2px"}}>MedBuddy AI Doctor</div>
+                <div style={{display:"flex",alignItems:"center",gap:4,marginTop:1}}>
+                  <div style={{width:5,height:5,borderRadius:"50%",background:"#38bdf8",boxShadow:"0 0 0 2px #38bdf840"}}/>
+                  <span style={{fontSize:10,color:"#7dd3fc"}}>Medical AI · Always available</span>
+                </div>
+              </div>
+            </div>
+            <button onClick={()=>setChatOpen(false)} style={{
+              width:28,height:28,borderRadius:"50%",background:"rgba(255,255,255,0.12)",
+              border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#e0d0ff",fontSize:16,fontWeight:300
+            }}>×</button>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"12px",display:"flex",flexDirection:"column",gap:10}}>
+          {msgs.map((m,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:m.from==="user"?"flex-end":"flex-start",alignItems:"flex-end",gap:6}}>
+              {m.from==="bot"&&(
+                <div style={{width:28,height:28,borderRadius:"50%",background:T.gradBtn,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <svg width="18" height="18" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="20" r="11" fill="white" fillOpacity="0.2"/><circle cx="28" cy="20" r="11" stroke="white" strokeWidth="2"/><rect x="19" y="11" width="18" height="4" rx="2" fill="white" fillOpacity="0.9"/><rect x="24" y="8" width="8" height="4" rx="1.5" fill="white"/><circle cx="24.5" cy="20" r="1.5" fill="white"/><circle cx="31.5" cy="20" r="1.5" fill="white"/><path d="M24 24.5 Q28 27.5 32 24.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none"/><rect x="25.5" y="30.5" width="5" height="4" rx="1" fill="white" fillOpacity="0.7"/><path d="M18 34 Q14 36 13 44 L43 44 Q42 36 38 34 L33 34.5 L28 38 L23 34.5 Z" fill="white" fillOpacity="0.15" stroke="white" strokeWidth="1.8"/><path d="M22 36 Q20 40 22 43 Q24 46 27 45" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/><circle cx="27.5" cy="45.5" r="2.2" fill="white" fillOpacity="0.9"/></svg>
+                </div>
+              )}
+              <div style={{
+                maxWidth:"78%",padding:"9px 12px",fontSize:12,lineHeight:1.65,
+                borderRadius:m.from==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",
+                background:m.from==="user"?T.gradBtn:"#f3f0ff",
+                color:m.from==="user"?"#fff":T.ink,
+              }}>{m.text}</div>
+            </div>
+          ))}
+          {chatLoad&&(
+            <div style={{display:"flex",alignItems:"flex-end",gap:6}}>
+              <div style={{width:28,height:28,borderRadius:"50%",background:T.gradBtn,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <svg width="18" height="18" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="20" r="11" fill="white" fillOpacity="0.2"/><circle cx="28" cy="20" r="11" stroke="white" strokeWidth="2"/><rect x="19" y="11" width="18" height="4" rx="2" fill="white" fillOpacity="0.9"/><rect x="24" y="8" width="8" height="4" rx="1.5" fill="white"/><circle cx="24.5" cy="20" r="1.5" fill="white"/><circle cx="31.5" cy="20" r="1.5" fill="white"/><path d="M24 24.5 Q28 27.5 32 24.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none"/><rect x="25.5" y="30.5" width="5" height="4" rx="1" fill="white" fillOpacity="0.7"/><path d="M18 34 Q14 36 13 44 L43 44 Q42 36 38 34 L33 34.5 L28 38 L23 34.5 Z" fill="white" fillOpacity="0.15" stroke="white" strokeWidth="1.8"/><path d="M22 36 Q20 40 22 43 Q24 46 27 45" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/><circle cx="27.5" cy="45.5" r="2.2" fill="white" fillOpacity="0.9"/></svg>
+              </div>
+              <div style={{background:"#f3f0ff",borderRadius:"14px 14px 14px 4px",padding:"10px 14px",display:"flex",gap:4,alignItems:"center"}}>
+                {[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:"50%",background:"#38bdf8",animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
+              </div>
+            </div>
+          )}
+          <div ref={chatEnd}/>
+        </div>
+
+        {/* Quick chips */}
+        <div style={{padding:"8px 12px",borderTop:`1px solid ${T.brd}`,display:"flex",gap:6,flexWrap:"wrap",flexShrink:0}}>
+          {["What is my diagnosis?","Side effects?","When to take?"].map(q=>(
+            <button key={q} onClick={()=>setChatIn(q)} style={{
+              fontSize:10,padding:"4px 10px",background:T.grnBg,
+              border:`1px solid ${T.brd2}`,borderRadius:20,color:T.grnD,cursor:"pointer",fontWeight:600
+            }}>{q}</button>
+          ))}
+        </div>
+
+        {/* Input row */}
+        <div style={{padding:"10px 12px",borderTop:`1px solid ${T.brd}`,flexShrink:0}}>
+          <div style={{display:"flex",gap:7}}>
+            <input
+              value={chatIn} onChange={e=>setChatIn(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&sendChat()}
+              placeholder="Ask anything about your prescription..."
+              style={{flex:1,fontSize:12,padding:"9px 12px",borderRadius:10,border:`1px solid ${T.brd2}`}}
+            />
+            <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{
+              width:38,height:38,borderRadius:10,
+              background:chatIn.trim()?T.gradBtn:"#e0f2fe",border:"none",
+              cursor:chatIn.trim()?"pointer":"default",
+              display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0
+            }}>
+              <Icon n="send" size={14} col={chatIn.trim()?"#fff":"#7dd3fc"}/>
+            </button>
+          </div>
+        </div>
+
+        {/* Help / Support accordion */}
+        <div style={{padding:"12px",background:"#faf7ff",borderTop:`1px solid ${T.brd}`,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
+            <Icon n="help" size={13} col={T.sub}/>
+            <span style={{fontWeight:700,fontSize:11,color:T.ink}}>Help / Support</span>
+          </div>
+          {[
+            {q:"How to upload a prescription?", a:"Go to Dashboard and click the upload zone."},
+            {q:"Are my prescriptions stored?",  a:"Saved locally in your browser only."},
+            {q:"How to set reminders?",          a:"Go to Account → Set Reminders."},
+          ].map((item,i)=>(
+            <div key={i} style={{marginBottom:5,background:T.card,borderRadius:8,border:`1px solid ${T.brd}`,overflow:"hidden"}}>
+              <button onClick={()=>setHelpOpen(p=>({...p,[i]:!p[i]}))} style={{
+                width:"100%",padding:"7px 10px",background:"transparent",border:"none",cursor:"pointer",
+                display:"flex",justifyContent:"space-between",alignItems:"center",textAlign:"left"
+              }}>
+                <span style={{fontSize:10,fontWeight:600,color:T.sub}}>{item.q}</span>
+                <span style={{fontSize:12,color:T.mute,fontWeight:700}}>{helpOpen[i]?"−":"+"}</span>
+              </button>
+              {helpOpen[i]&&<div style={{padding:"0 10px 8px",fontSize:10,color:T.sub,lineHeight:1.6}}>{item.a}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* FAB — floating action button */}
+      <button
+        onClick={()=>setChatOpen(p=>!p)}
+        style={{
+          position:"fixed", bottom:24, right:24,
+          width:62, height:62, borderRadius:"50%",
+          background: chatOpen ? "#0369a1" : T.grad,
+          border:"3px solid rgba(255,255,255,0.25)",
+          cursor:"pointer",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          boxShadow:"0 6px 24px rgba(2,132,199,0.5), 0 2px 8px rgba(0,0,0,0.15)",
+          zIndex:1000,
+          transform: chatOpen ? "scale(0.92)" : "scale(1)",
+          transition:"transform 0.25s cubic-bezier(0.34,1.26,0.64,1), background 0.2s",
+          padding:0,
+        }}
+        title="MedBuddy AI Doctor"
+      >
+        {chatOpen ? (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        ) : (
+          /* Doctor AI icon — stethoscope + circuit brain */
+          <svg width="34" height="34" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* Head / face circle */}
+            <circle cx="28" cy="20" r="11" fill="white" fillOpacity="0.18"/>
+            <circle cx="28" cy="20" r="11" stroke="white" strokeWidth="1.8"/>
+            {/* Doctor cap top */}
+            <rect x="19" y="11" width="18" height="4" rx="2" fill="white" fillOpacity="0.9"/>
+            <rect x="24" y="8" width="8" height="4" rx="1.5" fill="white"/>
+            {/* Eyes */}
+            <circle cx="24.5" cy="20" r="1.4" fill="white"/>
+            <circle cx="31.5" cy="20" r="1.4" fill="white"/>
+            {/* Smile */}
+            <path d="M24 24.5 Q28 27.5 32 24.5" stroke="white" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
+            {/* Neck */}
+            <rect x="25.5" y="30.5" width="5" height="4" rx="1" fill="white" fillOpacity="0.7"/>
+            {/* White coat body */}
+            <path d="M18 34 Q14 36 13 44 L43 44 Q42 36 38 34 L33 34.5 L28 38 L23 34.5 Z" fill="white" fillOpacity="0.15" stroke="white" strokeWidth="1.6"/>
+            {/* Coat lapels */}
+            <path d="M28 38 L24 34.5 L22 42" stroke="white" strokeWidth="1.2" strokeLinecap="round" fill="none" fillOpacity="0.6"/>
+            <path d="M28 38 L32 34.5 L34 42" stroke="white" strokeWidth="1.2" strokeLinecap="round" fill="none" fillOpacity="0.6"/>
+            {/* Stethoscope */}
+            <path d="M22 36 Q20 40 22 43 Q24 46 27 45" stroke="white" strokeWidth="1.8" strokeLinecap="round" fill="none"/>
+            <circle cx="27.5" cy="45.5" r="2" fill="white" fillOpacity="0.9"/>
+            {/* AI circuit dots on coat */}
+            <circle cx="34" cy="40" r="1" fill="white" fillOpacity="0.8"/>
+            <circle cx="37" cy="38" r="0.8" fill="white" fillOpacity="0.6"/>
+            <line x1="34" y1="40" x2="37" y2="38" stroke="white" strokeWidth="0.8" opacity="0.6"/>
+          </svg>
+        )}
+      </button>
+
+      {/* Unread badge — show when closed and there are bot messages */}
+      {!chatOpen && msgs.length > 1 && (
+        <div style={{
+          position:"fixed", bottom:68, right:20,
+          width:18, height:18, borderRadius:"50%",
+          background:T.red, color:"#fff",
+          fontSize:9, fontWeight:700,
+          display:"flex", alignItems:"center", justifyContent:"center",
+          zIndex:1001, pointerEvents:"none",
+          boxShadow:"0 2px 6px rgba(220,38,38,0.5)"
+        }}>
+          {msgs.filter(m=>m.from==="bot").length}
+        </div>
+      )}
+    </>
+  );
+
+  /* ════════════════════════════════════════
+     ROOT LAYOUT
+  ════════════════════════════════════════ */
+  return (
+    <div style={{display:"flex",minHeight:"100vh",background:T.bg,fontFamily:"'DM Sans','Segoe UI',sans-serif"}}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        input,select,textarea{font-family:inherit;background:#fafafa;border:1px solid ${T.brd2};border-radius:9px;color:${T.ink};font-size:13px;padding:8px 12px;outline:none;transition:border .15s,box-shadow .15s;}
+        input:focus,select:focus,textarea:focus{border-color:${T.grn};box-shadow:0 0 0 3px #0ea5e918;}
+        button{font-family:inherit;}
+        button:hover{opacity:.88;}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+        @keyframes fabpop{0%{transform:scale(0.6) rotate(-20deg);opacity:0}100%{transform:scale(1) rotate(0deg);opacity:1}}
+        ::-webkit-scrollbar{width:4px;height:4px}
+        ::-webkit-scrollbar-thumb{background:${T.brd2};border-radius:4px}
+      `}</style>
+
+      {/* LEFT SIDEBAR */}
+      <Sidebar/>
+
+      {/* CENTER COLUMN — now takes full remaining width */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
+        <Topbar/>
+        <div style={{flex:1,overflowY:"auto",padding:20}}>
+          {PAGES[page]}
+        </div>
+      </div>
+
+      {/* FLOATING CHATBOT */}
+      <FloatingChat/>
+    </div>
+  );
+}
